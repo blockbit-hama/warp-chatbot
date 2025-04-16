@@ -2,14 +2,29 @@ use warp::http::Method;
 use warp::Filter;
 
 use handle_errors::return_error;
+use tracing_subscriber::fmt::format::FmtSpan;
+
 mod routes;
 mod store;
 mod model;
 
 #[tokio::main]
 async fn main() {
+  
+  let log_filter = std::env::var("RUST_LOG")
+    .unwrap_or_else(|_| "practical_rust_book=info,warp=error".to_owned());
+  
+  
   let store = store::Store::new();
   let store_filter = warp::any().map(move || store.clone());
+  
+  tracing_subscriber::fmt()
+    // 위에 만든 필터로 어떤 추적을 기록할지 결정한다
+    .with_env_filter(log_filter)
+    // 각 범위가 닫힐 때 이벤트를 기록한다
+    // routes 구간에서 사용된다
+    .with_span_events(FmtSpan::CLOSE)
+    .init();
   
   let cors = warp::cors()
     .allow_any_origin()
@@ -28,7 +43,15 @@ async fn main() {
     .and(warp::path::end())
     .and(store_filter.clone())
     .and(warp::body::json())
-    .and_then(routes::question::add_question);
+    .and_then(routes::question::add_question)
+    .with(warp::trace(|info| {
+      tracing::info_span!(
+                  "get_questions request",
+                  method = %info.method(),
+                  path = %info.path(),
+                  id = %uuid::Uuid::new_v4(),
+              )
+    }));
   
   let update_question = warp::put()
     .and(warp::path("questions"))
