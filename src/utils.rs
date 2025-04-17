@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /**
 * filename : utils
@@ -75,11 +75,8 @@ where
   }
 }
 
+// ----------- retry 사용예 ----------------
 
-// example
-// #[tokio::main]
-// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//   // 사용자 정의 재시도 정책 생성
 //   let policy = RetryPolicy::new(5, |retry_count| {
 //     match retry_count {
 //       1 => 1000,        // 첫 번째 재시도: 1초 대기
@@ -89,58 +86,84 @@ where
 //     }
 //   });
 //
-//   println!("=== 실패 후 재시도 테스트 (실패 예상) ===");
-//   // 실패할 쿼리로 테스트
-//   let query_for_failure = "paul";
 //   let result = retry_with_policy(
 //     || async { call_openai_server_api(query_for_failure).await },
 //     policy,
 //   ).await;
-//
-//   match result {
-//     Ok(response) => println!("최종 성공: {}", response),
-//     Err(err) => println!("최종 실패: {}", err),
-//   }
-//
-//   // 새 정책 생성 (성공 테스트용)
-//   let success_policy = RetryPolicy::new(3, |retry_count| {
-//     match retry_count {
-//       1 => 1000,
-//       _ => 2000,
-//     }
-//   });
-//
-//   println!("\n=== 성공 케이스 테스트 ===");
-//   // 성공할 쿼리로 테스트
-//   let query_for_success = "toto";
-//   let result = retry_with_policy(
-//     || async { call_openai_server_api(query_for_success).await },
-//     success_policy,
-//   ).await;
-//
-//   match result {
-//     Ok(response) => println!("최종 성공: {}", response),
-//     Err(err) => println!("최종 실패: {}", err),
-//   }
-//
-//   // 복잡한 백오프 정책 예시
-//   let advanced_policy = RetryPolicy::new(10, |retry_count| {
-//     // 지수 백오프 + 최대 제한
-//     let base = 1000;  // 기본 1초
-//     let exp_backoff = base * 2u64.pow(retry_count - 1);  // 지수적으로 증가
-//     std::cmp::min(exp_backoff, 30000)  // 최대 30초로 제한
-//   });
-//
-//   println!("\n=== 고급 정책 테스트 ===");
-//   let result = retry_with_policy(
-//     || async { call_openai_server_api("will_fail").await },
-//     advanced_policy,
-//   ).await;
-//
-//   match result {
-//     Ok(response) => println!("최종 성공: {}", response),
-//     Err(err) => println!("최종 실패: {}", err),
-//   }
-//
-//   Ok(())
-// }
+
+
+
+
+// 서킷 브레이커 상태
+#[derive(Debug, Clone, PartialEq)]
+enum CircuitState {
+  Closed,     // 정상 작동 - API 호출 허용
+  Open,       // 에러 발생 - API 호출 차단
+  HalfOpen,   // 테스트 단계 - 제한적 API 호출 허용
+}
+
+// 서킷 브레이커 구조체
+struct CircuitBreaker {
+  state: CircuitState,
+  failure_count: u32,
+  failure_threshold: u32,     // 이 횟수 이상 실패하면 circuit open
+  reset_timeout_ms: u64,      // circuit을 half-open 상태로 전환하기까지의 시간
+  last_failure_time: Option<Instant>,
+}
+
+impl CircuitBreaker {
+  fn new(failure_threshold: u32, reset_timeout_ms: u64) -> Self {
+    CircuitBreaker {
+      state: CircuitState::Closed,
+      failure_count: 0,
+      failure_threshold,
+      reset_timeout_ms,
+      last_failure_time: None,
+    }
+  }
+  
+  fn record_success(&mut self) {
+    self.failure_count = 0;
+    self.state = CircuitState::Closed;
+    println!("Circuit breaker reset to CLOSED state after success");
+  }
+  
+  fn record_failure(&mut self) {
+    self.failure_count += 1;
+    self.last_failure_time = Some(Instant::now());
+    
+    if self.failure_count >= self.failure_threshold {
+      self.state = CircuitState::Open;
+      println!("Circuit OPENED after {} consecutive failures", self.failure_count);
+    }
+  }
+  
+  fn can_execute(&mut self) -> bool {
+    match self.state {
+      CircuitState::Closed => true,
+      CircuitState::Open => {
+        // reset_timeout 이후에는 HalfOpen 상태로 전환하여 시도해봄
+        if let Some(failure_time) = self.last_failure_time {
+          if failure_time.elapsed() >= Duration::from_millis(self.reset_timeout_ms) {
+            println!("🔍 Circuit changed from OPEN to HALF-OPEN. Will try one request.");
+            self.state = CircuitState::HalfOpen;
+            return true;
+          }
+        }
+        let remaining_ms = if let Some(failure_time) = self.last_failure_time {
+          let elapsed_ms = failure_time.elapsed().as_millis() as u64;
+          if elapsed_ms < self.reset_timeout_ms {
+            self.reset_timeout_ms - elapsed_ms
+          } else {
+            0
+          }
+        } else {
+          0
+        };
+        println!(" Circuit is OPEN. Blocking request. Will try again in {} ms", remaining_ms);
+        false
+      },
+      CircuitState::HalfOpen => true,
+    }
+  }
+}
