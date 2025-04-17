@@ -3,10 +3,12 @@ use warp::http::StatusCode;
 
 use crate::store::Store;
 use crate::model::pagination::extract_pagination;
-use crate::model::question::{Question, QuestionId};
+use crate::model::question::{NewQuestion, Question, QuestionId};
+use crate::profanity::check_profanity;
 use tracing::{info, instrument};
 use handle_errors::Error;
 
+#[instrument]
 pub async fn get_questions(
     params: HashMap<String, String>,
     store: Store,
@@ -25,18 +27,33 @@ pub async fn get_questions(
     }
 }
 
+
 pub async fn add_question(
     store: Store,
-    question: Question,
+    new_question: NewQuestion,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    store
-      .questions
-      .write()
-      .await
-      .insert(question.id.clone(), question);
+    let title = match check_profanity(new_question.title).await {
+        Ok(res) => res,
+        Err(e) => return Err(warp::reject::custom(e)),
+    };
     
-    Ok(warp::reply::with_status("Question added", StatusCode::OK))
+    let content = match check_profanity(new_question.content).await {
+        Ok(res) => res,
+        Err(e) => return Err(warp::reject::custom(e)),
+    };
+    
+    let question = NewQuestion {
+        title: title,
+        content,
+        tags: new_question.tags,
+    };
+    
+    match store.add_question(question).await {
+        Ok(question) => Ok(warp::reply::json(&question)),
+        Err(e) => Err(warp::reject::custom(e)),
+    }
 }
+
 
 pub async fn update_question(
     id: String,

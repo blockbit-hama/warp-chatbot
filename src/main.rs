@@ -7,6 +7,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 mod routes;
 mod store;
 mod model;
+mod profanity;
 
 #[tokio::main]
 async fn main() {
