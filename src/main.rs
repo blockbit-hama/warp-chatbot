@@ -8,6 +8,7 @@ mod routes;
 mod store;
 mod model;
 mod profanity;
+mod utils;
 
 #[tokio::main]
 async fn main() {
