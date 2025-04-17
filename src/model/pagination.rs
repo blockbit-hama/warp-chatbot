@@ -1,6 +1,7 @@
 use handle_errors::Error;
 use std::collections::HashMap;
 
+
 /// Pagination 구조체는 쿼리 매개변수에서
 /// 추출된다
 #[derive(Debug)]
@@ -21,7 +22,7 @@ pub struct Pagination {
 /// let mut query = HashMap::new();
 /// query.insert("start".to_string(), "1".to_string());
 /// query.insert("end".to_string(), "10".to_string());
-/// let p = model::pagination::extract_pagination(query).unwrap();
+/// let p = types::pagination::extract_pagination(query).unwrap();
 /// assert_eq!(p.start, 1);
 /// assert_eq!(p.end, 10);
 /// ```
@@ -32,19 +33,19 @@ pub fn extract_pagination(params: HashMap<String, String>) -> Result<Pagination,
             // start 매개변수를 쿼리에서 가져와
             // 숫자로 변환을 시도한다
             start: params
-                .get("start")
-                .unwrap()
-                .parse::<usize>()
-                .map_err(Error::ParseError)?,
+              .get("start")
+              .unwrap()
+              .parse::<usize>()
+              .map_err(Error::ParseError)?,
             // end 매개변수를 쿼리에서 가져와
             // 숫자로 변환을 시도한다
             end: params
-                .get("end")
-                .unwrap()
-                .parse::<usize>()
-                .map_err(Error::ParseError)?,
+              .get("end")
+              .unwrap()
+              .parse::<usize>()
+              .map_err(Error::ParseError)?,
         });
     }
-
+    
     Err(Error::MissingParameters)
 }
