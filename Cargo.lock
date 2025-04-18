@@ -1805,6 +1805,7 @@ name = "warp-chatbot"
 version = "0.1.0"
 dependencies = [
  "handle-errors",
+ "rand",
  "reqwest",
  "reqwest-middleware",
  "reqwest-retry",

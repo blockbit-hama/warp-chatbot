@@ -2,6 +2,8 @@ use std::fmt::Display;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use rand::Rng;
+use tokio::time::sleep;
 
 /**
 * filename : utils
@@ -10,21 +12,6 @@ use std::time::{Duration, Instant};
 * description: 
 **/
 
-
-// ----------- retryer 사용예 ----------------
-
-//   let policy = RetryPolicy::new(5, |retry_count| {
-//     match retry_count {
-//       1 => 1000,        // 첫 번째 재시도: 1초 대기
-//       n if n < 3 => 2000, // 2-3번째 재시도: 2초 대기
-//       n if n < 5 => 5000, // 4-5번째 재시도: 5초 대기
-//       _ => 10000,       // 그 이후: 10초 대기
-//     }
-//   });
-//
-// let result = retryer.execute(|| async {
-//   call_openai_server_api(query_for_failure).await
-// }).await;
 
 
 // 서킷 브레이커 상태
@@ -128,111 +115,104 @@ where
   }
 }
 
-// Retryer 구조체 정의
-struct Retryer<BP>
+// 재시도 실행 함수
+async fn retry_async<FN, Fut, T, E, B>(
+  policy: &RetryPolicy<B>,
+  mut operation: FN,
+) -> Result<T, E>
 where
-  BP: Fn(u32) -> u64,
+  FN: FnMut() -> Fut,
+  Fut: std::future::Future<Output = Result<T, E>>,
+  E: Display,
+  B: Fn(u32) -> u64,
 {
-  policy: RetryPolicy<BP>,
-  circuit_breaker: Arc<Mutex<CircuitBreaker>>,
+  let mut attempt = 0;
+  
+  loop {
+    let result = operation().await;
+    
+    match result {
+      Ok(value) => return Ok(value),
+      Err(e) => {
+        attempt += 1;
+        if attempt >= policy.max_retries {
+          println!(" 재시도 초과. 마지막 에러: {}", e);
+          return Err(e);
+        }
+        
+        let base_backoff = policy.get_backoff_ms(attempt);
+        let jitter = rand::thread_rng().gen_range(0..=100);
+        let delay = base_backoff + jitter;
+        
+        println!(
+          "{}번째 재시도 실패. {}ms 후 재시도합니다. 에러: {}",
+          attempt, delay, e
+        );
+        
+        sleep(Duration::from_millis(delay)).await;
+      }
+    }
+  }
 }
 
-impl<BP> Retryer<BP>
-where
-  BP: Fn(u32) -> u64,
-{
-  // 새로운 Retryer 인스턴스 생성
-  fn new(
-    max_retries: u32,
-    backoff_function: BP,
-    failure_threshold: u32,
-    reset_timeout_ms: u64,
-  ) -> Self {
-    let policy = RetryPolicy::new(max_retries, backoff_function);
-    let circuit_breaker = Arc::new(Mutex::new(
-      CircuitBreaker::new(failure_threshold, reset_timeout_ms)
-    ));
-    
-    Retryer {
-      policy,
-      circuit_breaker,
-    }
-  }
-  
-  // 직접 RetryPolicy와 CircuitBreaker 인스턴스로 생성
-  fn with_components(
-    policy: RetryPolicy<BP>,
-    circuit_breaker: Arc<Mutex<CircuitBreaker>>,
-  ) -> Self {
-    Retryer {
-      policy,
-      circuit_breaker,
-    }
-  }
-  
-  // 작업 실행 및 재시도 로직
-  async fn execute<T, E, F, Fut>(&self, operation: F) -> Result<T, E>
-  where
-    F: Fn() -> Fut,
-    Fut: Future<Output = Result<T, E>>,
-    E: Display,
-  {
-    let mut retry_count = 0;
-    
-    loop {
-      // 서킷 브레이커 확인
-      {
-        let mut breaker = self.circuit_breaker.lock().unwrap();
-        if !breaker.can_execute() {
-          // 서킷이 열려있으면 바로 에러 반환
-          return operation().await; // 실패할 것이지만 에러 타입을 맞추기 위해 한 번 호출
-        }
-      }
-      
-      // 작업 실행
-      match operation().await {
-        Ok(result) => {
-          // 성공 시 서킷 브레이커 리셋
-          let mut breaker = self.circuit_breaker.lock().unwrap();
-          breaker.record_success();
-          return Ok(result);
-        }
-        Err(err) => {
-          // 실패 시 서킷 브레이커 업데이트
-          {
-            let mut breaker = self.circuit_breaker.lock().unwrap();
-            breaker.record_failure();
-          }
-          
-          retry_count += 1;
-          
-          if retry_count >= self.policy.max_retries {
-            println!("🛑 Maximum retry attempts ({}) reached. Giving up.", self.policy.max_retries);
-            return Err(err);
-          }
-          
-          let wait_time_ms = self.policy.get_backoff_ms(retry_count);
-          
-          println!("⏱️  Retry attempt {}/{}. Waiting for {} ms before next attempt...",
-                   retry_count, self.policy.max_retries, wait_time_ms);
-          println!("   Last error: {}", err);
-          
-          // 대기 시간 동안 대기
-          tokio::time::sleep(Duration::from_millis(wait_time_ms)).await;
-        }
-      }
-    }
-  }
-  
-  // 서킷 브레이커 상태 반환 메서드
-  fn get_circuit_state(&self) -> CircuitState {
-    let breaker = self.circuit_breaker.lock().unwrap();
-    breaker.state.clone()
-  }
-  
-  // 실패 카운트 반환 메서드
-  fn get_failure_count(&self) -> u32 {
-    let breaker = self.circuit_breaker.lock().unwrap();
-    breaker.failure_count
-  }
-}
+
+
+// ----------- retryer 사용예 ----------------
+// CircuitBreaker 는 전역적으로 Retry는 독립적으로
+
+//   let policy = RetryPolicy::new(5, |retry_count| {
+//     match retry_count {
+//       1 => 1000,        // 첫 번째 재시도: 1초 대기
+//       n if n < 3 => 2000, // 2-3번째 재시도: 2초 대기
+//       n if n < 5 => 5000, // 4-5번째 재시도: 5초 대기
+//       _ => 10000,       // 그 이후: 10초 대기
+//     }
+//   });
+
+//
+// // 테스트용 API 호출 함수
+// async fn call_external_api() -> Result<String, String> {
+//   let success = rand::thread_rng().gen_bool(0.4);
+//   if success {
+//     Ok("외부 API 응답 성공".into())
+//   } else {
+//     Err("외부 API 에러".into())
+//   }
+// }
+//
+// // 실제 처리 함수
+// async fn handle_request(breaker: Arc<Mutex<CircuitBreaker>>) {
+//   {
+//     let mut br = breaker.lock().unwrap();
+//     if !br.can_execute() {
+//       println!("🚫 Circuit open: 요청 차단됨");
+//       return;
+//     }
+//   }
+//
+//   let result = retry_async(3, call_external_api).await;
+//
+//   match result {
+//     Ok(msg) => {
+//       println!("{msg}");
+//       breaker.lock().unwrap().record_success();
+//     }
+//     Err(e) => {
+//       println!("🔥 최종 실패: {e}");
+//       breaker.lock().unwrap().record_failure();
+//     }
+//   }
+// }
+//
+// #[tokio::main]
+// async fn main() {
+//   let breaker = Arc::new(Mutex::new(CircuitBreaker::new(3, Duration::from_secs(10))));
+//
+//   for _ in 0..10 {
+//     let br = breaker.clone();
+//     task::spawn(async move {
+//       handle_request(br).await;
+//     });
+//     sleep(Duration::from_millis(500)).await;
+//   }
+// }
