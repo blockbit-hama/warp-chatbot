@@ -14,6 +14,7 @@ mod profanity;
 mod routes;
 mod store;
 mod types;
+mod retry;
 
 pub struct OneshotHandler {
     pub sender: Sender<i32>,
