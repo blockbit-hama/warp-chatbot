@@ -11,7 +11,7 @@ pub use handle_errors;
 
 pub mod config;
 mod profanity;
-mod routes;
+mod handlers;
 mod store;
 mod types;
 mod retry;
@@ -33,7 +33,7 @@ async fn build_routes(store: store::Store) -> impl Filter<Extract = impl Reply> 
         .and(warp::path::end())
         .and(store_filter.clone())
         .and(warp::body::json())
-        .and_then(routes::authentication::login);
+        .and_then(handlers::authentication::login);
 
     let get_questions = warp::get()
         .and(warp::path("questions"))
@@ -41,7 +41,7 @@ async fn build_routes(store: store::Store) -> impl Filter<Extract = impl Reply> 
         .and(warp::query())
         .and(store_filter.clone())
         //.and(id_filter)
-        .and_then(routes::question::get_questions)
+        .and_then(handlers::question::get_questions)
         .with(warp::trace(|info| {
             tracing::info_span!(
                 "get_questions request",
@@ -54,42 +54,42 @@ async fn build_routes(store: store::Store) -> impl Filter<Extract = impl Reply> 
     let add_question = warp::post()
         .and(warp::path("questions"))
         .and(warp::path::end())
-        .and(routes::authentication::auth())
+        .and(handlers::authentication::auth())
         .and(store_filter.clone())
         .and(warp::body::json())
-        .and_then(routes::question::add_question);
+        .and_then(handlers::question::add_question);
 
     let update_question = warp::put()
         .and(warp::path("questions"))
         .and(warp::path::param::<i32>())
         .and(warp::path::end())
-        .and(routes::authentication::auth())
+        .and(handlers::authentication::auth())
         .and(store_filter.clone())
         .and(warp::body::json())
-        .and_then(routes::question::update_question);
+        .and_then(handlers::question::update_question);
 
     let delete_question = warp::delete()
         .and(warp::path("questions"))
         .and(warp::path::param::<i32>())
         .and(warp::path::end())
-        .and(routes::authentication::auth())
+        .and(handlers::authentication::auth())
         .and(store_filter.clone())
-        .and_then(routes::question::delete_question);
+        .and_then(handlers::question::delete_question);
 
     let add_answer = warp::post()
         .and(warp::path("answers"))
         .and(warp::path::end())
-        .and(routes::authentication::auth())
+        .and(handlers::authentication::auth())
         .and(store_filter.clone())
         .and(warp::body::form())
-        .and_then(routes::answer::add_answer);
+        .and_then(handlers::answer::add_answer);
 
     let registration = warp::post()
         .and(warp::path("registration"))
         .and(warp::path::end())
         .and(store_filter.clone())
         .and(warp::body::json())
-        .and_then(routes::authentication::register);
+        .and_then(handlers::authentication::register);
 
     get_questions
         .or(add_question)
@@ -128,7 +128,7 @@ pub async fn setup_store(config: &config::Config) -> Result<store::Store, handle
         // 위에 만든 필터로 어떤 추적을 기록할지 결정한다
         .with_env_filter(log_filter)
         // 각 범위가 닫힐 때 이벤트를 기록한다
-        // routes 구간에서 사용된다
+        // handlers 구간에서 사용된다
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
